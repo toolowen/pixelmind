@@ -1,0 +1,54 @@
+# PixelMind VLM GRPO Config ★
+# Stage 5: Align VLM with Group Relative Policy Optimization
+# Single-network RL with visual inputs — the core innovation.
+
+model:
+  hidden_size: 768
+  num_hidden_layers: 8
+  max_seq_len: 1280
+
+vision:
+  encoder_name: siglip2
+  encoder_path: ./model/siglip2-base-p32-256-ve
+
+training:
+  save_dir: ./out
+  save_weight: grpo_vlm
+  epochs: 1
+  batch_size: 2                 # Small batch — GRPO is memory-heavy
+  learning_rate: 3.0e-7         # Very low LR for RL stability
+  max_gen_len: 512              # Max tokens to generate per response
+  accumulation_steps: 1
+  grad_clip: 1.0
+  dtype: bfloat16
+  num_workers: 2
+  use_compile: 0
+
+grpo:
+  num_generations: 4            # Responses per prompt (group size)
+  beta: 0.1                     # KL penalty coefficient
+  loss_type: cispo              # "grpo" or "cispo"
+  epsilon: 0.2                  # PPO clip epsilon
+  epsilon_high: 5.0             # CISPO upper bound
+
+rollout:
+  engine: torch                 # "torch" (supports VLM) or "sglang"
+  temperature: 0.8
+
+data:
+  path: ../data/multimodal/grpo.parquet
+
+reward:
+  model_path: ../../internlm2-1_8b-reward
+
+checkpoint:
+  from_weight: sft_vlm          # loads sft_vlm_768.pth
+  from_resume: 0
+
+logging:
+  log_interval: 1               # Log every step (GRPO steps are slow)
+  save_interval: 10
+  debug_mode: false
+  debug_interval: 20
+  use_wandb: false
+  wandb_project: PixelMind-VLM-GRPO

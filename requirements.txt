@@ -1,0 +1,8 @@
+torch>=2.0
+transformers>=4.45
+datasets
+pyarrow
+Pillow
+swanlab
+numpy
+accelerate

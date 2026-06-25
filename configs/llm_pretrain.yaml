@@ -1,0 +1,32 @@
+# PixelMind LLM Pretrain Config
+# Stage 1: Train LLM from scratch with next-token prediction
+
+model:
+  hidden_size: 768
+  num_hidden_layers: 8
+
+training:
+  save_dir: ./out
+  save_weight: pretrain
+  epochs: 2
+  batch_size: 32
+  learning_rate: 5.0e-4
+  max_seq_len: 340
+  accumulation_steps: 8
+  grad_clip: 1.0
+  dtype: bfloat16
+  num_workers: 8
+  use_compile: 0
+
+data:
+  path: ../data/text/pretrain.jsonl
+
+checkpoint:
+  from_weight: none       # "none" = from scratch
+  from_resume: 0          # 0 = fresh start, 1 = auto-resume
+
+logging:
+  log_interval: 100
+  save_interval: 1000
+  use_wandb: false
+  wandb_project: PixelMind-Pretrain

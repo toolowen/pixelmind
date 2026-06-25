@@ -1,0 +1,38 @@
+# PixelMind VLM Pretrain Config
+# Stage 3: Align vision encoder output to LLM embedding space
+# Only the MMVisionProjector is trained.
+
+model:
+  hidden_size: 768
+  num_hidden_layers: 8
+
+vision:
+  encoder_name: siglip2
+  encoder_path: ./model/siglip2-base-p32-256-ve
+
+training:
+  save_dir: ./out
+  save_weight: pretrain_vlm
+  epochs: 1
+  batch_size: 4
+  learning_rate: 4.0e-4       # High LR — only projector trains
+  max_seq_len: 450
+  accumulation_steps: 1
+  grad_clip: 1.0
+  dtype: bfloat16
+  num_workers: 2
+  freeze_llm: 2                # 2 = projector only
+  use_compile: 0
+
+data:
+  path: ../data/multimodal/pretrain_i2t.parquet
+
+checkpoint:
+  from_weight: sft             # loads LLM from sft_768.pth
+  from_resume: 0
+
+logging:
+  log_interval: 100
+  save_interval: 1000
+  use_wandb: false
+  wandb_project: PixelMind-VLM-Pretrain

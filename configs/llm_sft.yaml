@@ -1,0 +1,32 @@
+# PixelMind LLM SFT Config
+# Stage 2: Fine-tune LLM on instruction data
+
+model:
+  hidden_size: 768
+  num_hidden_layers: 8
+
+training:
+  save_dir: ./out
+  save_weight: sft
+  epochs: 2
+  batch_size: 16
+  learning_rate: 1.0e-5
+  max_seq_len: 768
+  accumulation_steps: 1
+  grad_clip: 1.0
+  dtype: bfloat16
+  num_workers: 8
+  use_compile: 0
+
+data:
+  path: ../data/text/sft.jsonl
+
+checkpoint:
+  from_weight: pretrain    # loads pretrain_768.pth
+  from_resume: 0
+
+logging:
+  log_interval: 100
+  save_interval: 1000
+  use_wandb: false
+  wandb_project: PixelMind-SFT
