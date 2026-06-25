@@ -10,7 +10,7 @@
   <a href="https://pixelmind.readthedocs.io">Docs (WIP)</a>
 </p>
 
-PixelMind is a **minimal, educational Vision-Language Model** trained entirely from scratch. It proves that a useful multimodal model can be built with ~65M parameters, trained in about 2 hours on a single consumer GPU (RTX 3090 / 4060), for roughly $3 in GPU rental cost.
+PixelMind is a **minimal, educational Vision-Language Model** trained entirely from scratch. It proves that a useful multimodal model can be built with ~65M parameters.
 
 Built by merging and refining the [MiniMind](https://github.com/jingyaogong/minimind) (pure LLM) and [MiniMind-V](https://github.com/jingyaogong/minimind-v) (VLM) projects into a single, clean codebase.
 
@@ -20,7 +20,7 @@ Built by merging and refining the [MiniMind](https://github.com/jingyaogong/mini
 
 - 🧩 **Pluggable Visual Encoders** — SigLIP2 / DINOv2 / InternViT via abstract interface, with ablation comparison framework
 - 📊 **OCR / Document Understanding** — Data-driven: reads text in images via DocVQA / ChartQA training data
-- 🚀 **VLM GRPO (⭐ Innovation)** — Group Relative Policy Optimization for VLM: image-conditioned reinforcement learning alignment
+- 🚀 **VLM GRPO ** — Group Relative Policy Optimization for VLM: image-conditioned reinforcement learning alignment
 - 📝 **Custom Native `generate()`** — Full PyTorch implementation with GQA, RoPE, top-p, temperature, streamer support
 - ⚡ **Efficient Training** — DDP multi-GPU, bfloat16, torch.compile, flash attention (via PyTorch SDPA)
 - 🏗️ **Clean Package Structure** — Single `pixelmind` package (not two repos), well-organized modules
