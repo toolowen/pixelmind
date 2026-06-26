@@ -87,7 +87,7 @@ class VLMJudgeRewardModel:
             trust_remote_code=True,
         ).eval().to(device)
         self.processor = AutoProcessor.from_pretrained(
-            model_path, trust_remote_code=True, use_fast=True
+            model_path, trust_remote_code=True
         )
         self.device = device
         self.dtype = dtype
