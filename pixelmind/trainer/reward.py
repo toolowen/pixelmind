@@ -97,7 +97,6 @@ class VLMJudgeRewardModel:
         """
         Score a VLM response given the image(s) and conversation.
         """
-        # Decode the image
         if isinstance(raw_images, list) and len(raw_images) > 0:
             img = Image.open(io.BytesIO(raw_images[0])).convert("RGB")
         elif isinstance(raw_images, bytes):
@@ -112,7 +111,7 @@ class VLMJudgeRewardModel:
         if matches:
             question = matches[-1].strip()
 
-        judge_prompt = (
+        judge_text = (
             "You are an expert evaluator for vision-language tasks.\n\n"
             "Given an image and a question, evaluate how well the response "
             "answers the question based on what's actually in the image.\n\n"
@@ -127,13 +126,12 @@ class VLMJudgeRewardModel:
             "Output ONLY a single number."
         )
 
-        # Qwen2.5-VL: image=None in messages tells template to emit placeholders;
-        # the actual PIL image is passed to processor() which counts pad tokens.
+        # Build messages with PIL Image — apply_chat_template auto-inserts vision tokens
         messages = [{
             "role": "user",
             "content": [
-                {"type": "image", "image": None},
-                {"type": "text", "text": judge_prompt},
+                {"type": "image", "image": img},
+                {"type": "text", "text": judge_text},
             ]
         }]
 
@@ -141,9 +139,8 @@ class VLMJudgeRewardModel:
             messages, tokenize=False, add_generation_prompt=True
         )
         inputs = self.processor(
-            text=[text], images=[img], return_tensors="pt",
+            text=text, images=img, return_tensors="pt"
         ).to(self.device)
-
         outputs = self.model.generate(
             **inputs, max_new_tokens=10, do_sample=False,
         )
