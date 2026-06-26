@@ -111,12 +111,10 @@ class VLMJudgeRewardModel:
         elif isinstance(raw_images, bytes):
             img = Image.open(io.BytesIO(raw_images)).convert("RGB")
         else:
-            # No image — fall back to text-only scoring
             return self._text_only_score(prompt_text, response)
 
         # Extract the user's question from the prompt
         question = prompt_text
-        # Try to find the last user message
         user_pattern = r'<\|im_start\|>user\s+(.*?)<\|im_end\|>'
         matches = re.findall(user_pattern, prompt_text, re.DOTALL)
         if matches:
@@ -145,11 +143,11 @@ class VLMJudgeRewardModel:
             ]
         }]
 
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        # Pass messages directly — processor handles chat template + images together
         inputs = self.processor(
-            text=[text], images=[img], return_tensors="pt"
+            text=[messages],
+            images=[img],
+            return_tensors="pt",
         ).to(self.device)
 
         outputs = self.model.generate(
@@ -162,7 +160,6 @@ class VLMJudgeRewardModel:
         # Parse the score
         match = re.search(r'([1-5])', output_text)
         score = float(match.group(1)) if match else 3.0
-        # Map [1,5] → [-3.0, 3.0] to match legacy reward range
         return (score - 3.0) * 1.5
 
     @torch.no_grad()
@@ -174,12 +171,12 @@ class VLMJudgeRewardModel:
             f"Response: {response}\n\n"
             "Rate on scale 1-5. Output ONLY a number."
         )
-        messages = [{"role": "user", "content": judge_prompt}]
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        messages = [{
+            "role": "user",
+            "content": [{"type": "text", "text": judge_prompt}]
+        }]
         inputs = self.processor(
-            text=[text], return_tensors="pt"
+            text=[messages], return_tensors="pt"
         ).to(self.device)
 
         outputs = self.model.generate(
