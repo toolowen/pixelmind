@@ -1,6 +1,6 @@
 # PixelMind on AutoDL — Complete Training Guide
 
-> Tested on: RTX 4090 24GB | PyTorch 2.3.0 | CUDA 12.1 | Python 3.10
+> Tested for: RTX 4090 24GB | PyTorch 2.3.0+ | CUDA 12.1+ | Python 3.10
 
 ---
 
@@ -8,12 +8,12 @@
 
 | Item | Selection |
 |------|-----------|
-| GPU | RTX 4090 24GB (1×) |
+| GPU | RTX 4090 24GB (单卡) |
 | Image | PyTorch 2.3.0 / CUDA 12.1 / Python 3.10 |
-| System Disk | ≥ 50GB (models + data ~15GB) |
-| Data Disk | optional, mount to `./data` if provided |
+| System Disk | ≥ 50GB (系统 + 模型 ~15GB + 数据 ~10GB) |
+| Data Disk | 可选, 有的话挂到 `./data` |
 
-After SSH login, verify:
+登录后先验证环境：
 
 ```bash
 nvidia-smi
@@ -26,17 +26,17 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ## 1. Environment Setup
 
 ```bash
-# Mirror for faster downloads (China)
+# 国内镜像加速
 export HF_ENDPOINT=https://hf-mirror.com
 
-# Install core dependencies
+# 安装核心依赖
 pip install transformers==4.45.0 datasets pyarrow Pillow swanlab numpy accelerate \
   -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# Optional: HuggingFace Hub client for dataset download
+# HuggingFace Hub + ModelScope 客户端 (下载数据用)
 pip install huggingface_hub modelscope -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# Verify
+# 验证
 python -c "import torch, transformers, datasets; print('Environment OK')"
 ```
 
@@ -61,15 +61,17 @@ mkdir -p model/tokenizer
 
 python -c "
 from modelscope import snapshot_download
-snapshot_download('gongjb/minimind', local_dir='./model',
+import shutil, os
+
+snapshot_download('gongjb/minimind', local_dir='./_tmp',
                   allow_patterns=['tokenizer.json', 'tokenizer_config.json'])
-# Move files into place
-import os, shutil
-for f in os.listdir('./model'):
+for f in os.listdir('./_tmp'):
     if 'tokenizer' in f:
-        shutil.move(f'./model/{f}', f'./model/tokenizer/{f}')
+        shutil.move(f'./_tmp/{f}', f'./model/tokenizer/{f}')
+shutil.rmtree('./_tmp', ignore_errors=True)
 print('Tokenizer ready')
 "
+
 # Verify
 python -c "
 from transformers import AutoTokenizer
@@ -92,12 +94,31 @@ processor = SiglipImageProcessor.from_pretrained('google/siglip2-base-patch32-25
 processor.save_pretrained('./model/siglip2-base-p32-256-ve')
 print('SigLIP2 ready')
 "
+
 # Verify
 python -c "
 from transformers import SiglipVisionModel
 model = SiglipVisionModel.from_pretrained('./model/siglip2-base-p32-256-ve')
 print(f'SigLIP2 OK: hidden_size={model.config.hidden_size}')
 # Expected: 768
+"
+```
+
+### 3.3 Reward Model (for GRPO stage, ~3.6GB)
+
+```bash
+python -c "
+from modelscope import snapshot_download
+snapshot_download('Shanghai_AI_Laboratory/internlm2-1_8b-reward',
+                  local_dir='./internlm2-1_8b-reward')
+print('Reward model ready')
+"
+
+# Verify
+python -c "
+from transformers import AutoModel
+model = AutoModel.from_pretrained('./internlm2-1_8b-reward', trust_remote_code=True)
+print('Reward model OK')
 "
 ```
 
@@ -114,16 +135,15 @@ python -c "
 from modelscope import snapshot_download
 import shutil, os
 
-# Download mini datasets (~3GB total)
 snapshot_download('gongjb/minimind', local_dir='./_dl',
                   allow_patterns=['pretrain_t2t_mini.jsonl', 'sft_t2t_mini.jsonl'])
 
-# Move to data/text/
 for f in ['pretrain_t2t_mini.jsonl', 'sft_t2t_mini.jsonl']:
     shutil.move(f'./_dl/{f}', f'./data/text/{f}')
 shutil.rmtree('./_dl', ignore_errors=True)
 print('LLM data ready')
 "
+
 # Verify
 python -c "
 from datasets import load_dataset
@@ -147,6 +167,7 @@ snapshot_download('FreedomIntelligence/ALLaVA-4V',
                   local_dir='./data/multimodal')
 print('VLM data ready')
 "
+
 # Verify
 python -c "
 import pyarrow.parquet as pq
@@ -158,31 +179,13 @@ print(f'SFT rows: {pf.metadata.num_rows}')
 "
 ```
 
-### 4.3 Reward Model (for GRPO, ~3.6GB)
-
-```bash
-python -c "
-from modelscope import snapshot_download
-snapshot_download('Shanghai_AI_Laboratory/internlm2-1_8b-reward',
-                  local_dir='./internlm2-1_8b-reward')
-print('Reward model ready')
-"
-# Verify
-python -c "
-from transformers import AutoModel
-model = AutoModel.from_pretrained('./internlm2-1_8b-reward', trust_remote_code=True)
-print('Reward model OK')
-"
-```
+**注意：** ALLaVA-4V 总计 ~8.7GB，下载较慢。如果时间紧张，可以先用 MiniMind-V 自带的小样本跳过 Stage 3-4，直接到 Stage 5 GRPO（但 GRPO 也需要 Parquet 格式的 VLM 数据）。
 
 ---
 
 ## 5. Smoke Test Before Training
 
 ```bash
-cd ~/pixelmind
-
-# Create log directory
 mkdir -p logs
 
 # 5.1 LLM import test
@@ -203,7 +206,7 @@ m = PixelMind(cfg, vision_encoder_path='./model/siglip2-base-p32-256-ve')
 print(f'VLM OK: {sum(p.numel() for p in m.parameters())/1e6:.1f}M params')
 "
 
-# 5.3 Data loader test (1 batch)
+# 5.3 Data loader test (1 batch, 验证 Parquet 数据可读)
 python -c "
 import torch
 from transformers import AutoTokenizer
@@ -233,19 +236,20 @@ print(f'Data OK: ids={batch[0].shape}, labels={batch[1].shape}')
 
 ## 6. Full Training Pipeline
 
-All commands use `nohup` for background execution. Logs written to `logs/`.
+预计 VRAM 峰值 (RTX 4090 24GB):
 
-Expected VRAM peaks on 4090 24GB:
+| Stage | VRAM | Time | 关键数据 |
+|-------|------|------|----------|
+| 1. LLM Pretrain | ~3GB | ~30 min | pretrain_t2t_mini.jsonl |
+| 2. LLM SFT | ~5GB | ~20 min | sft_t2t_mini.jsonl |
+| 3. VLM Pretrain | ~8GB | ~1-2 h | pretrain_i2t.parquet |
+| 4. VLM SFT | ~10GB | ~2-3 h | sft_i2t.parquet |
+| 5. VLM GRPO ⭐ | ~18GB | ~3-5 h | sft_i2t.parquet |
 
-| Stage | VRAM | Time (mini data) |
-|-------|------|------------------|
-| 1. LLM Pretrain | ~3GB | ~30 min |
-| 2. LLM SFT | ~5GB | ~20 min |
-| 3. VLM Pretrain | ~8GB | ~1 h |
-| 4. VLM SFT | ~10GB | ~1 h |
-| 5. VLM GRPO ⭐ | ~18GB | ~2 h |
+### 6.1 Stage 1: LLM Pretrain
 
-### 6.1 LLM Pretrain (from scratch)
+**训练内容**：Next-token prediction, from scratch  
+**超参**：lr=5e-4, batch=32, max_seq=340, accum=8
 
 ```bash
 nohup python -m pixelmind.trainer.llm_pretrain \
@@ -261,11 +265,16 @@ nohup python -m pixelmind.trainer.llm_pretrain \
     --wandb_project PixelMind-Pipeline \
     > logs/llm_pretrain.log 2>&1 &
 
-# Monitor
 tail -f logs/llm_pretrain.log
 ```
 
-### 6.2 LLM SFT
+**预期 loss**：9.x → 3.5-4.5  
+**输出**：`out/pretrain_768.pth`
+
+### 6.2 Stage 2: LLM SFT
+
+**训练内容**：Instruction tuning on multi-turn conversations  
+**超参**：lr=1e-5, batch=16, max_seq=768
 
 ```bash
 nohup python -m pixelmind.trainer.llm_sft \
@@ -280,9 +289,17 @@ nohup python -m pixelmind.trainer.llm_sft \
     --use_wandb \
     --wandb_project PixelMind-Pipeline \
     > logs/llm_sft.log 2>&1 &
+
+tail -f logs/llm_sft.log
 ```
 
-### 6.3 VLM Pretrain (projector alignment)
+**预期 loss**：3.x → 2.5-3.5  
+**输出**：`out/sft_768.pth`
+
+### 6.3 Stage 3: VLM Pretrain (Projector Alignment)
+
+**训练内容**：视觉投影层对齐, LLM + vision encoder 冻结  
+**超参**：lr=4e-4, batch=4, max_seq=450, freeze_llm=2
 
 ```bash
 nohup python -m pixelmind.trainer.vlm_pretrain \
@@ -298,9 +315,17 @@ nohup python -m pixelmind.trainer.vlm_pretrain \
     --use_wandb \
     --wandb_project PixelMind-Pipeline \
     > logs/vlm_pretrain.log 2>&1 &
+
+tail -f logs/vlm_pretrain.log
 ```
 
-### 6.4 VLM SFT
+**预期 loss**：9.x → 4.0-5.0  
+**输出**：`out/pretrain_vlm_768.pth` (不含 vision_encoder, ~130MB)
+
+### 6.4 Stage 4: VLM SFT
+
+**训练内容**：多模态指令微调, projector + LLM 首尾层  
+**超参**：lr=5e-6, batch=4, max_seq=768, freeze_llm=1
 
 ```bash
 nohup python -m pixelmind.trainer.vlm_sft \
@@ -316,9 +341,17 @@ nohup python -m pixelmind.trainer.vlm_sft \
     --use_wandb \
     --wandb_project PixelMind-Pipeline \
     > logs/vlm_sft.log 2>&1 &
+
+tail -f logs/vlm_sft.log
 ```
 
-### 6.5 VLM GRPO ⭐ (core innovation)
+**预期 loss**：5.x → 3.0-4.0  
+**输出**：`out/sft_vlm_768.pth`
+
+### 6.5 Stage 5: VLM GRPO ⭐ (Core Innovation)
+
+**训练内容**：Group Relative Policy Optimization with visual inputs  
+**超参**：lr=3e-7, batch=2, num_generations=4, max_gen_len=256, beta=0.1, loss_type=cispo
 
 ```bash
 nohup python -m pixelmind.trainer.vlm_grpo \
@@ -340,139 +373,228 @@ nohup python -m pixelmind.trainer.vlm_grpo \
     --use_wandb \
     --wandb_project PixelMind-Pipeline \
     > logs/vlm_grpo.log 2>&1 &
+
+tail -f logs/vlm_grpo.log
 ```
+
+**预期 Reward ↑**：训练过程中 reward 均值缓慢上升  
+**输出**：`out/grpo_vlm_768.pth`
 
 ---
 
-## 7. Monitor Training
+## 7. VLM GRPO Reward Design (How It Works)
+
+### 7.1 Pipeline Flow (per step)
+
+```
+Dataset → VLMRLDataset (image + prompt, no answer)
+   → Collate (pad images + text)
+   → Re-tokenize (left-padded for generation)
+   → RolloutEngine.rollout() WITH pixel_values
+        → model.generate() generates 4 responses per image
+        → compute_per_token_logps() records probabilities
+   → Reward computation:
+        (a) Text quality: response length ±0.5
+        (b) Format: <think> tag validity ±1.0
+        (c) Repetition penalty: trigram overlap ≤0.5
+        (d) Reward Model: internlm2-1_8b-reward ∈ [-3,3]
+   → Policy forward WITH pixel_values → log-probs
+   → Reference forward WITH pixel_values → ref log-probs
+   → GRPO: group-adv normalized, KL penalty, ratio clipping
+   → CISPO loss → backward → optimizer step
+```
+
+### 7.2 Reward Components
+
+| Reward Signal | Type | Score Range | Source |
+|--------------|------|-------------|--------|
+| **Response Length** | 文本质量 | ±0.5 | 规则 (20~800 chars +0.5, else -0.5) |
+| **Thinking Format** | 结构规范 | ±1.25 | 规则 (<think> 标签检查) |
+| **Repetition Penalty** | 文本质量 | −0~0.5 | 规则 (trigram overlap) |
+| **Reward Model** | 文本质量 | −3.0~+3.0 | internlm2-1_8b-reward |
+
+**为什么没有视觉 reward (CLIPScore / Qwen2.5-VL)？**
+
+- **CLIPScore** 只度量图文的粗粒度相似度，语义理解弱
+- **Qwen2.5-VL-3B 打分** 是可行的增强方向，但会显著增加 GRPO 的推理开销 (~8× per step)
+- 当前设计是**可运行的 MVP**——先用文本 reward 跑通训练流程，视觉 reward 作为后续升级项
+- 这也正是简历上的技术亮点：**"设计了多维度 reward 函数用于 VLM 强化学习对齐，并在单卡上完成了训练框架验证"**
+
+### 7.3 GRPO Hyperparameters Explained
+
+| 参数 | 值 | 解释 |
+|------|-----|------|
+| `num_generations=4` | 每组 4 个回答 | 越多统计越稳, 但显存×生成次数 |
+| `beta=0.1` | KL 惩罚系数 | 防止策略偏离 reference 太远 |
+| `loss_type=cispo` | CISPO loss | 仅裁剪上界, 允许策略激进提升 |
+| `epsilon_high=5.0` | CISPO 上界 | 5× ratio cap, 比标准 PPO (2.0) 宽松 |
+| `learning_rate=3e-7` | 学习率 | RL 阶段极低 lr, 避免破坏 SFT 能力 |
+| `max_gen_len=256` | 生成上限 | 控制显存和训练速度 |
+| `temperature=0.8` | 采样温度 | 平衡多样性和质量 |
+
+---
+
+## 8. Monitor Training
 
 ```bash
-# Check all running processes
+# 查看所有后台进程
 jobs -l
 
-# Watch a specific log
+# 实时查看某个阶段的 log
 tail -f logs/llm_pretrain.log
+tail -f logs/llm_sft.log
+tail -f logs/vlm_pretrain.log
+tail -f logs/vlm_sft.log
+tail -f logs/vlm_grpo.log
 
-# Check GPU usage
+# GPU 使用率
 nvidia-smi
 
-# SwanLab dashboard (open in browser)
-# The script will print a URL in the log
+# SwanLab 可视化 (log 里会打印 URL)
 grep -i "swanlab\|dashboard\|view" logs/llm_pretrain.log
 ```
 
+**Attention 关键字**（说明训练正常）:
+```
+"Epoch:[1/2](100/xxx), loss: x.xxxx, lr: x.xxxx"  ← 正常
+"CUDA out of memory"                                ← 需要减小 batch/gen_len
+"NaN" in loss                                       ← 降低 lr 或增大 beta
+```
+
 ---
 
-## 8. Evaluate Results
+## 9. Evaluate Results
 
-### 8.1 LLM Evaluation
+### 9.1 检查 Loss 收敛
 
 ```bash
-# Check convergence: loss should drop from ~9 to ~4 (pretrain), ~3 (SFT)
 grep "loss:" logs/llm_pretrain.log | tail -5
 grep "loss:" logs/llm_sft.log | tail -5
+grep "loss:" logs/vlm_pretrain.log | tail -5
+grep "loss:" logs/vlm_sft.log | tail -5
+grep "Reward:" logs/vlm_grpo.log | tail -10
+```
 
-# Interactive chat
+### 9.2 LLM Chat 测试
+
+```bash
 python -m pixelmind.eval.chat_llm --weight sft
 ```
 
-### 8.2 VLM Evaluation
+### 9.3 VLM Chat 测试
 
 ```bash
-# Prepare test images
 mkdir -p dataset/eval_images
-# Upload your test images (scp, wget, etc.)
+# 上传几张测试图片 (scp / wget / curl)
 
-# Test VLM (SFT weight)
 python -m pixelmind.eval.chat_vlm \
     --weight sft_vlm \
     --image_dir dataset/eval_images/ \
     --temperature 0.7
+```
 
-# Test VLM (GRPO weight, after RL)
-python -m pixelmind.eval.chat_vlm \
-    --weight grpo_vlm \
-    --image_dir dataset/eval_images/ \
-    --temperature 0.7
+### 9.4 GRPO 前后对比
+
+```bash
+# SFT only
+python -m pixelmind.eval.chat_vlm --weight sft_vlm --image_dir dataset/eval_images/
+
+# GRPO (RL aligned)
+python -m pixelmind.eval.chat_vlm --weight grpo_vlm --image_dir dataset/eval_images/
 ```
 
 ---
 
-## 9. OOM Troubleshooting
+## 10. OOM Troubleshooting
 
-If you hit CUDA out-of-memory, try these in order:
-
-### VLM Pretrain
+### Stage 1-2 (LLM): 基本不会 OOM
+4090 24GB 跑 64M 纯 LLM 绰绰有余。如遇到 OOM：
 ```bash
-# Halve batch
---batch_size 2 --accumulation_steps 2
+--batch_size 16 --accumulation_steps 2     # 等效 batch 32
 ```
 
-### VLM SFT
+### Stage 3-4 (VLM SFT): 可能 OOM
 ```bash
-# Halve batch, reduce seq len
---batch_size 2 --max_seq_len 512
+--batch_size 2 --accumulation_steps 2     # 等效 batch 4
+--max_seq_len 512                          # 减短序列
 ```
 
-### VLM GRPO (most memory-hungry)
+### Stage 5 (VLM GRPO): 最可能 OOM
+按以下顺序依次尝试：
 ```bash
-# Reduce generation count
---num_generations 2
-# Reduce generation length
---max_gen_len 128
-# Halve batch
---batch_size 1
-# Remove thinking tag overhead (skip <think> format)
-# Run without reward model initially (text-only heuristics)
+# 1. 减少生成数量
+--num_generations 2              # 从 4 减到 2
+
+# 2. 减少生成长度
+--max_gen_len 128               # 从 256 减到 128
+
+# 3. 减小 batch
+--batch_size 1                  # 从 2 减到 1
+
+# 4. 缩短 prompt
+--max_seq_len 512               # 从 768 减到 512
+
+# 5. 关闭 torch.compile (如果开着)
+--use_compile 0
 ```
 
 ---
 
-## 10. Expected Results
+## 11. Expected Results
 
-After full pipeline:
+| Stage | Expected Loss Range | Output File |
+|-------|--------------------|-------------|
+| LLM Pretrain | 3.5 - 4.5 | `out/pretrain_768.pth` (~132MB) |
+| LLM SFT | 2.5 - 3.5 | `out/sft_768.pth` (~132MB) |
+| VLM Pretrain | 4.0 - 5.0 | `out/pretrain_vlm_768.pth` (~134MB) |
+| VLM SFT | 3.0 - 4.0 | `out/sft_vlm_768.pth` (~134MB) |
+| VLM GRPO ⭐ | Reward ↑ | `out/grpo_vlm_768.pth` (~134MB) |
 
-| Stage | Expected Loss | Output |
-|-------|--------------|--------|
-| LLM Pretrain | ~3.5-4.5 | `out/pretrain_768.pth` |
-| LLM SFT | ~2.5-3.5 | `out/sft_768.pth` |
-| VLM Pretrain | ~4.0-5.0 | `out/pretrain_vlm_768.pth` |
-| VLM SFT | ~3.0-4.0 | `out/sft_vlm_768.pth` |
-| VLM GRPO | Reward ↑ over steps | `out/grpo_vlm_768.pth` |
-
-The 65M model will produce **basic but meaningful** image descriptions. Hallucinations and repetition are expected — this is known behavior documented in MiniMind-V.
+65M 模型的对话能力有限，会有重复和幻觉——这是 MiniMind-V 原论文已知的局限。简历上反而可以作为 **"已知局限 + 改进分析"** 的素材。
 
 ---
 
-## 11. Files to Collect for Your Resume
+## 12. Files to Collect for Your Resume
 
-After training completes:
+训练结束后收集以下素材：
 
 ```bash
-# 1. SwanLab loss curves (screenshot from dashboard)
-# 2. Generated outputs before/after GRPO (side-by-side comparison)
-# 3. Model weights (for demo)
+# 1. SwanLab loss 曲线 (从 dashboard 截图保存)
+# 2. 生成效果对比 (SFT vs GRPO) 截图
 ls -lh out/*.pth
 
-# 4. Training log summary
+# 3. 训练日志摘要
 grep -E "Epoch.*loss" logs/llm_pretrain.log | tail -3
-grep -E "Epoch.*loss" logs/llm_sft.log | tail -3
-grep -E "Epoch.*loss" logs/vlm_pretrain.log | tail -3
 grep -E "Epoch.*loss" logs/vlm_sft.log | tail -3
 grep -E "Reward" logs/vlm_grpo.log | tail -10
+
+# 4. 编码器对比实验 (optional)
+#    python -m pixelmind.eval.benchmarks --compare_encoders
 ```
 
 ---
 
-## Quick Reference: One-liner Pipeline
+## Technical Notes
 
-```bash
-# Run all 5 stages sequentially (when you're confident)
-cd ~/pixelmind && mkdir -p logs
+### 为什么用 ALLaVA-4V SFT 数据做 GRPO？
 
-for stage in llm_pretrain llm_sft vlm_pretrain vlm_sft vlm_grpo; do
-    echo "=== Starting $stage at $(date) ==="
-    # ... (copy the command for each stage above)
-    echo "=== $stage done at $(date) ==="
-done
-```
+`VLMRLDataset` 和 `VLMDataset` 的**关键区别**：
+- `VLMDataset`：`add_generation_prompt=False`，输出 `(input_ids, labels, pixel_values)`
+- `VLMRLDataset`：`add_generation_prompt=True`，输出 `{prompt, prompt_ids, pixel_values}`
+
+GRPO 阶段模型需要自己**生成**回答——所以只有图片+问题，没有正确答案。Reward 模型对生成的回答打分，文本质量高 → 高奖励，重复/空洞 → 低奖励。
+
+### 视觉编码器在整个 GRPO 中冻结
+
+Policy model 和 Reference model **共享同一个 vision encoder 实例**。`pixel_values` 在 rollout → policy forward → reference forward 全链路传递，但 encoder 权重不变。Gradient 只更新 LLM + projector。
+
+### CISPO vs GRPO
+
+CISPO (`loss_type=cispo`):
+- 仅裁剪 ratio 上界 (`max=epsilon_high`)，保留下界不做 pessimistic clipping
+- 用 `clamped_ratio * log_probs` 代替 `min(ratio*adv, clipped*adv)`
+- 对小模型更友好——允许策略在 good tokens 上大胆提升概率
+
+标准 GRPO (`loss_type=grpo`):
+- 对称裁剪 `±epsilon`，取 min 防止过度更新
+- 更保守，适合大模型
