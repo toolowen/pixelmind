@@ -115,10 +115,9 @@ class VLMDataset(Dataset):
         return labels
 
     def __getitem__(self, index: int):
-        # O(1) memory access — same as MiniMind-V
-        row = self.table.slice(index, 1).to_pydict()
-        conv_json = row["conversations"][0]
-        image_bytes = row["image_bytes"][0]
+        # Direct column access — same as MiniMind-V (O(1), no copy)
+        conv_json = self.table["conversations"][index].as_py()
+        image_bytes = self.table["image_bytes"][index].as_py()
 
         conversations = json.loads(conv_json)
         image_bytes = (
@@ -193,9 +192,9 @@ class VLMRLDataset(Dataset):
         return self.num_rows
 
     def __getitem__(self, index: int):
-        row = self.table.slice(index, 1).to_pydict()
-        conv_json = row["conversations"][0]
-        image_bytes = row["image_bytes"][0]
+        # Direct column access — same as MiniMind-V (O(1), no copy)
+        conv_json = self.table["conversations"][index].as_py()
+        image_bytes = self.table["image_bytes"][index].as_py()
 
         conversations = json.loads(conv_json)
         image_bytes = (
