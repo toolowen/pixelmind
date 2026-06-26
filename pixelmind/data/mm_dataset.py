@@ -243,4 +243,5 @@ class VLMRLDataset(Dataset):
             "prompt": prompt_text,
             "prompt_ids": prompt_ids,
             "pixel_values": pixel_values,
+            "raw_images": image_bytes,  # raw JPEG bytes for VLM judge reward
         }

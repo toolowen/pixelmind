@@ -49,7 +49,7 @@ from ..trainer.utils import (
 )
 from ..trainer.checkpoint import vlm_checkpoint
 from ..trainer.model_init import init_vlm_model
-from ..trainer.reward import rep_penalty, calculate_rewards, LMForRewardModel
+from ..trainer.reward import rep_penalty, calculate_rewards, LMForRewardModel, VLMJudgeRewardModel
 from ..trainer.rollout_engine import create_rollout_engine
 
 warnings.filterwarnings("ignore")
@@ -58,18 +58,18 @@ warnings.filterwarnings("ignore")
 # ── Combined reward function for VLM GRPO ──
 
 def calculate_vlm_rewards(
-    prompts, responses, reward_model, num_generations, device
+    prompts, responses, reward_model, num_generations, device,
+    raw_image_list=None,
 ):
     """
     Compute rewards for VLM GRPO.
 
-    Same as LLM GRPO rewards (text quality + RM score) but designed to
-    be extended with VLM-specific signals:
-      - OCR accuracy bonus (if prompt asks to read text in image)
-      - Hallucination penalty (saying objects not in the image)
+    Passes raw image bytes to the reward model (VLMJudgeRewardModel)
+    when available, so the judge can see the actual image.
     """
     return calculate_rewards(
-        prompts, responses, reward_model, num_generations, device
+        prompts, responses, reward_model, num_generations, device,
+        raw_image_list=raw_image_list,
     )
 
 
@@ -83,6 +83,7 @@ def vlm_grpo_train_epoch(
     for step, batch in enumerate(loader, start=start_step + 1):
         prompts = batch["prompts"]       # list[str], length B
         pixel_values = batch["pixel_values"]  # image tensors
+        raw_images_list = batch.get("raw_images_list", None)  # raw bytes for VLM judge
 
         # ── Move pixel_values to device ──
         pv_device = {}
@@ -144,6 +145,7 @@ def vlm_grpo_train_epoch(
         rewards = calculate_vlm_rewards(
             prompts, completions, reward_model,
             args.num_generations, args.device,
+            raw_image_list=raw_images_list,
         )
 
         # ── Policy forward WITH vision ★ ──
@@ -434,10 +436,18 @@ def main():
     for param in ref_model.parameters():
         param.requires_grad_(False)
 
-    # Reward model
-    reward_model = LMForRewardModel(
-        args.reward_model_path, device=args.device, dtype=torch.float16
-    )
+    # ── Init reward model: auto-detect VLM judge ──
+    def _is_vlm_judge(path):
+        return any(kw in path.lower() for kw in ("qwen2.5-vl", "qwen25-vl", "qwen2.5vl", "qwen-vl"))
+    if _is_vlm_judge(args.reward_model_path):
+        reward_model = VLMJudgeRewardModel(
+            args.reward_model_path, device=args.device, dtype=torch.float16
+        )
+        Logger(f"Using VLM judge reward model: {args.reward_model_path}")
+    else:
+        reward_model = LMForRewardModel(
+            args.reward_model_path, device=args.device, dtype=torch.float16
+        )
 
     # Rollout engine
     rollout_engine = create_rollout_engine(

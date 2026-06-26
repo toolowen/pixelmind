@@ -49,10 +49,12 @@ def vlm_rl_collate_fn(batch):
       - prompts: list[str]
       - prompt_ids: padded tensor [B, max_len]
       - pixel_values: batched pixel data
+      - raw_images_list: list[bytes] — raw JPEG bytes for VLM reward judge
     """
     prompts = [b["prompt"] for b in batch]
     prompt_ids_list = [b["prompt_ids"] for b in batch]
     pixel_data = [b["pixel_values"] for b in batch]
+    raw_images_list = [b["raw_images"] for b in batch]
 
     # Pad prompt_ids
     prompt_ids = torch.nn.utils.rnn.pad_sequence(
@@ -72,4 +74,5 @@ def vlm_rl_collate_fn(batch):
         "prompts": prompts,
         "prompt_ids": prompt_ids,
         "pixel_values": pixel_values,
+        "raw_images_list": raw_images_list,  # list of bytes, one per sample
     }
