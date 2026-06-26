@@ -127,11 +127,12 @@ class VLMJudgeRewardModel:
             "Output ONLY a single number."
         )
 
-        # Qwen2.5-VL: use image URL placeholder in messages, actual PIL image in processor
+        # Qwen2.5-VL: image=None in messages tells template to emit placeholders;
+        # the actual PIL image is passed to processor() which counts pad tokens.
         messages = [{
             "role": "user",
             "content": [
-                {"type": "image", "image": "file:///tmp/img.jpg"},
+                {"type": "image", "image": None},
                 {"type": "text", "text": judge_prompt},
             ]
         }]
@@ -140,7 +141,7 @@ class VLMJudgeRewardModel:
             messages, tokenize=False, add_generation_prompt=True
         )
         inputs = self.processor(
-            text=[text], images=[img], return_tensors="pt", padding=True,
+            text=[text], images=[img], return_tensors="pt",
         ).to(self.device)
 
         outputs = self.model.generate(
