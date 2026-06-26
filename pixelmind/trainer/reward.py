@@ -96,16 +96,8 @@ class VLMJudgeRewardModel:
     def get_score(self, raw_images, prompt_text, response):
         """
         Score a VLM response given the image(s) and conversation.
-
-        Args:
-            raw_images: list of bytes (JPEG image bytes), one per image
-            prompt_text: the full conversation prompt text
-            response: the model's generated response
-
-        Returns:
-            float score in [-3.0, 3.0]
         """
-        # Decode the first image (most VLM tasks have one image)
+        # Decode the image
         if isinstance(raw_images, list) and len(raw_images) > 0:
             img = Image.open(io.BytesIO(raw_images[0])).convert("RGB")
         elif isinstance(raw_images, bytes):
@@ -113,7 +105,7 @@ class VLMJudgeRewardModel:
         else:
             return self._text_only_score(prompt_text, response)
 
-        # Extract the user's question from the prompt
+        # Extract the user's question
         question = prompt_text
         user_pattern = r'<\|im_start\|>user\s+(.*?)<\|im_end\|>'
         matches = re.findall(user_pattern, prompt_text, re.DOTALL)
@@ -135,19 +127,20 @@ class VLMJudgeRewardModel:
             "Output ONLY a single number."
         )
 
+        # Qwen2.5-VL: use image URL placeholder in messages, actual PIL image in processor
         messages = [{
             "role": "user",
             "content": [
-                {"type": "image", "image": img},
+                {"type": "image", "image": "file:///tmp/img.jpg"},
                 {"type": "text", "text": judge_prompt},
             ]
         }]
 
-        # Pass messages directly — processor handles chat template + images together
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         inputs = self.processor(
-            text=[messages],
-            images=[img],
-            return_tensors="pt",
+            text=[text], images=[img], return_tensors="pt", padding=True,
         ).to(self.device)
 
         outputs = self.model.generate(
@@ -157,7 +150,6 @@ class VLMJudgeRewardModel:
             outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True
         ).strip()
 
-        # Parse the score
         match = re.search(r'([1-5])', output_text)
         score = float(match.group(1)) if match else 3.0
         return (score - 3.0) * 1.5
@@ -175,17 +167,18 @@ class VLMJudgeRewardModel:
             "role": "user",
             "content": [{"type": "text", "text": judge_prompt}]
         }]
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         inputs = self.processor(
-            text=[messages], return_tensors="pt"
+            text=[text], return_tensors="pt", padding=True
         ).to(self.device)
-
         outputs = self.model.generate(
             **inputs, max_new_tokens=10, do_sample=False,
         )
         output_text = self.processor.decode(
             outputs[0][len(inputs.input_ids[0]):], skip_special_tokens=True
         ).strip()
-
         match = re.search(r'([1-5])', output_text)
         score = float(match.group(1)) if match else 3.0
         return (score - 3.0) * 1.5
