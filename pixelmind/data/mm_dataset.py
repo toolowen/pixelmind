@@ -8,7 +8,6 @@ Provides:
 Based on the VLM dataset pipeline with efficient row-group caching.
 """
 
-import bisect
 import io
 import json
 import random
@@ -49,8 +48,6 @@ class VLMDataset(Dataset):
         image_token_len=64,
     ):
         super().__init__()
-        self.parquet_file = pq.ParquetFile(parquet_path)
-        self.num_rows = self.parquet_file.metadata.num_rows
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.preprocess = preprocess
@@ -62,30 +59,11 @@ class VLMDataset(Dataset):
             f"{tokenizer.eos_token}\n", add_special_tokens=False
         ).input_ids
 
-        # Precompute row-group offsets
-        row_offsets = []
-        cum = 0
-        for i in range(self.parquet_file.metadata.num_row_groups):
-            row_offsets.append(cum)
-            cum += self.parquet_file.metadata.row_group(i).num_rows
-        self._rg_offsets = row_offsets
-        self._num_rg = len(row_offsets)
-
-        # Row-group shuffle: shuffle groups, then rows within each group
-        rg_order = list(range(self._num_rg))
-        random.shuffle(rg_order)
-        perm = []
-        for rg in rg_order:
-            start = self._rg_offsets[rg]
-            nr = self.parquet_file.metadata.row_group(rg).num_rows
-            rows = list(range(start, start + nr))
-            random.shuffle(rows)
-            perm.extend(rows)
-        self._perm_map = perm
-
-        # Row-group cache (single-worker scenarios hit nearly always)
-        self._cached_rg_idx = -1
-        self._cached_rg_table = None
+        # Load the entire parquet table into memory for O(1) per-sample access.
+        # This matches MiniMind-V's approach — row-group disk streaming kills
+        # throughput when access is shuffled. Cost: ~8-10 GB RAM for 2.9M rows.
+        self.table = pq.read_table(parquet_path)
+        self.num_rows = self.table.num_rows
 
     def __len__(self):
         return self.num_rows
@@ -136,34 +114,12 @@ class VLMDataset(Dataset):
                 i += 1
         return labels
 
-    # ── Row-group lookup ──
-
-    def _global_row(self, sampled_index: int):
-        """Map shuffled index back to global parquet row number."""
-        return self._perm_map[sampled_index]
-
-    def _row_group_of(self, global_row: int):
-        """Find which row group a global row belongs to."""
-        rg_idx = bisect.bisect_right(self._rg_offsets, global_row) - 1
-        return rg_idx, self._rg_offsets[rg_idx]
-
-    def _read_row(self, global_row: int):
-        """Read a single row from parquet with row-group caching."""
-        rg_idx, rg_start = self._row_group_of(global_row)
-        if rg_idx != self._cached_rg_idx:
-            self._cached_rg_table = self.parquet_file.read_row_group(
-                rg_idx, columns=["conversations", "image_bytes"]
-            ).to_pydict()
-            self._cached_rg_idx = rg_idx
-        offset = global_row - rg_start
-        return (
-            self._cached_rg_table["conversations"][offset],
-            self._cached_rg_table["image_bytes"][offset],
-        )
-
     def __getitem__(self, index: int):
-        global_row = self._global_row(index)
-        conv_json, image_bytes = self._read_row(global_row)
+        # O(1) memory access — same as MiniMind-V
+        row = self.table.slice(index, 1).to_pydict()
+        conv_json = row["conversations"][0]
+        image_bytes = row["image_bytes"][0]
+
         conversations = json.loads(conv_json)
         image_bytes = (
             image_bytes
@@ -224,63 +180,23 @@ class VLMRLDataset(Dataset):
         image_token_len=64,
     ):
         super().__init__()
-        self.parquet_file = pq.ParquetFile(parquet_path)
-        self.num_rows = self.parquet_file.metadata.num_rows
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.preprocess = preprocess
         self.image_special_token = image_special_token * image_token_len
 
-        # Row-group offsets
-        row_offsets = []
-        cum = 0
-        for i in range(self.parquet_file.metadata.num_row_groups):
-            row_offsets.append(cum)
-            cum += self.parquet_file.metadata.row_group(i).num_rows
-        self._rg_offsets = row_offsets
-        self._num_rg = len(row_offsets)
-
-        # Shuffle groups + rows
-        rg_order = list(range(self._num_rg))
-        random.shuffle(rg_order)
-        perm = []
-        for rg in rg_order:
-            start = self._rg_offsets[rg]
-            nr = self.parquet_file.metadata.row_group(rg).num_rows
-            rows = list(range(start, start + nr))
-            random.shuffle(rows)
-            perm.extend(rows)
-        self._perm_map = perm
-
-        self._cached_rg_idx = -1
-        self._cached_rg_table = None
+        # Load entire table into memory — same approach as VLMDataset
+        self.table = pq.read_table(parquet_path)
+        self.num_rows = self.table.num_rows
 
     def __len__(self):
         return self.num_rows
 
-    def _global_row(self, sampled_index: int):
-        return self._perm_map[sampled_index]
-
-    def _row_group_of(self, global_row: int):
-        rg_idx = bisect.bisect_right(self._rg_offsets, global_row) - 1
-        return rg_idx, self._rg_offsets[rg_idx]
-
-    def _read_row(self, global_row: int):
-        rg_idx, rg_start = self._row_group_of(global_row)
-        if rg_idx != self._cached_rg_idx:
-            self._cached_rg_table = self.parquet_file.read_row_group(
-                rg_idx, columns=["conversations", "image_bytes"]
-            ).to_pydict()
-            self._cached_rg_idx = rg_idx
-        offset = global_row - rg_start
-        return (
-            self._cached_rg_table["conversations"][offset],
-            self._cached_rg_table["image_bytes"][offset],
-        )
-
     def __getitem__(self, index: int):
-        global_row = self._global_row(index)
-        conv_json, image_bytes = self._read_row(global_row)
+        row = self.table.slice(index, 1).to_pydict()
+        conv_json = row["conversations"][0]
+        image_bytes = row["image_bytes"][0]
+
         conversations = json.loads(conv_json)
         image_bytes = (
             image_bytes
