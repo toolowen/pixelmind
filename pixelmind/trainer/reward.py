@@ -155,7 +155,7 @@ class VLMJudgeRewardModel:
     @torch.no_grad()
     def _text_only_score(self, prompt_text, response):
         """Fallback text-only scoring when no image is available."""
-        judge_prompt = (
+        judge_text = (
             "You are an expert evaluator.\n\n"
             f"Question: {prompt_text[-500:]}\n\n"
             f"Response: {response}\n\n"
@@ -163,13 +163,13 @@ class VLMJudgeRewardModel:
         )
         messages = [{
             "role": "user",
-            "content": [{"type": "text", "text": judge_prompt}]
+            "content": [{"type": "text", "text": judge_text}]
         }]
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
         inputs = self.processor(
-            text=[text], return_tensors="pt", padding=True
+            text=text, return_tensors="pt"
         ).to(self.device)
         outputs = self.model.generate(
             **inputs, max_new_tokens=10, do_sample=False,
