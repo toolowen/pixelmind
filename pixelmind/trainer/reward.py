@@ -104,12 +104,14 @@ class VLMJudgeRewardModel:
         else:
             return self._text_only_score(prompt_text, response)
 
-        # Extract the user's question
+       # Extract the user's question, strip image pad tokens
         question = prompt_text
         user_pattern = r'<\|im_start\|>user\s+(.*?)<\|im_end\|>'
         matches = re.findall(user_pattern, prompt_text, re.DOTALL)
         if matches:
             question = matches[-1].strip()
+        # Remove image_pad tokens — they confuse Qwen's template
+        question = re.sub(r'<\|image_pad\|>+', '', question)
 
         judge_text = (
             "You are an expert evaluator for vision-language tasks.\n\n"
