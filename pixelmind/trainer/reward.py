@@ -15,7 +15,7 @@ import re
 
 import torch
 from PIL import Image
-from transformers import AutoModel, AutoTokenizer, AutoModelForCausalLM, AutoProcessor
+from transformers import AutoModel, AutoTokenizer, AutoModelForCausalLM, AutoModelForVision2Seq, AutoProcessor
 
 
 # ── Text-only Reward Model (internlm2-1_8b-reward) ──
@@ -81,7 +81,7 @@ class VLMJudgeRewardModel:
     they penalize hallucinations and reward accurate visual descriptions.
     """
     def __init__(self, model_path, device="cuda", dtype=torch.float16):
-        self.model = AutoModelForCausalLM.from_pretrained(
+        self.model = AutoModelForVision2Seq.from_pretrained(
             model_path,
             torch_dtype=dtype,
             trust_remote_code=True,
